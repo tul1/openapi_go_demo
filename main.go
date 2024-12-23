@@ -2,98 +2,88 @@ package main
 
 import (
 	"net/http"
-	"sync"
+	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tul1/openapi_go_demo/db"
+	"github.com/tul1/openapi_go_demo/model"
 	todoapi "github.com/tul1/openapi_go_demo/openapi"
 )
 
-// Todo represents a task item
-type Todo struct {
-	ID   int    `json:"id"`
-	Task string `json:"task"`
+type DatabaseHandler interface {
+	GetTodos() ([]model.Todo, error)
+	AddTodo(todo model.Todo) error
+	GetTodoByID(id int) (model.Todo, error)
+	DeleteTodoByID(id int) error
 }
 
-// Server holds the data and methods for the API
 type Server struct {
-	mu    sync.Mutex
-	todos []Todo
+	dbHandler DatabaseHandler
 }
 
-// PtrString is a helper function to create a pointer to a string.
 func PtrString(s string) *string {
 	return &s
 }
 
-// GetTodos retrieves all TODOs
 func (s *Server) GetTodos(c *gin.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var result []todoapi.PostTodosJSONBody
-	for _, todo := range s.todos {
-		result = append(result, todoapi.PostTodosJSONBody{Task: PtrString(todo.Task)})
+	todos, err := s.dbHandler.GetTodos()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusOK, todos)
 }
 
-// PostTodos creates a new TODO item
 func (s *Server) PostTodos(c *gin.Context) {
-	var newTodo todoapi.PostTodosJSONBody
+	var newTodo model.Todo
 	if err := c.ShouldBindJSON(&newTodo); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.dbHandler.AddTodo(newTodo); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
-	id := len(s.todos) + 1
-	todo := Todo{ID: id, Task: *newTodo.Task}
-	s.todos = append(s.todos, todo)
-
-	c.JSON(http.StatusCreated, todo)
+	c.JSON(http.StatusCreated, newTodo)
 }
 
-// GetTodosId retrieves a TODO by ID
 func (s *Server) GetTodosId(c *gin.Context, id int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, todo := range s.todos {
-		if todo.ID == id {
-			c.JSON(http.StatusOK, todo)
-			return
-		}
+	todo, err := s.dbHandler.GetTodoByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "TODO not found"})
+		return
 	}
-
-	c.JSON(http.StatusNotFound, gin.H{"error": "TODO not found"})
+	c.JSON(http.StatusOK, todo)
 }
 
-// DeleteTodosId deletes a TODO by ID
 func (s *Server) DeleteTodosId(c *gin.Context, id int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i, todo := range s.todos {
-		if todo.ID == id {
-			s.todos = append(s.todos[:i], s.todos[i+1:]...)
-			c.Status(http.StatusNoContent)
-			return
-		}
+	if err := s.dbHandler.DeleteTodoByID(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "TODO not found"})
+		return
 	}
-
-	c.JSON(http.StatusNotFound, gin.H{"error": "TODO not found"})
+	c.Status(http.StatusNoContent)
 }
 
 func main() {
-	r := gin.Default()
-	server := &Server{todos: []Todo{
-		{ID: 1, Task: "Buy groceries"},
-		{ID: 2, Task: "Write OpenAPI spec"},
-	}}
+	dsn := "todos.db"
+	useGORM := os.Getenv("USE_GORM") == "true"
 
-	// Register routes based on the generated OpenAPI interface
+	var dbHandler DatabaseHandler
+	var err error
+	if useGORM {
+		dbHandler, err = db.NewGORMHandler(dsn)
+	} else {
+		dbHandler, err = db.NewSQLHandler(dsn)
+	}
+	if err != nil {
+		panic(err)
+	}
+
+	r := gin.Default()
+	server := &Server{dbHandler: dbHandler}
+
 	todoapi.RegisterHandlers(r, server)
 
 	_ = r.Run(":8080")
