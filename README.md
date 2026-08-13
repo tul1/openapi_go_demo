@@ -1,5 +1,7 @@
 # Go OpenAPI Demo
 
+Small exercise: generate a Gin server from an OpenAPI spec (`oapi-codegen`) and back it with SQLite. Useful as a reminder of the codegen workflow — not a product.
+
 ## Steps to Run the API
 
 ### 1. Install Dependencies
